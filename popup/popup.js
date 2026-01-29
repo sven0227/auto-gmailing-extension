@@ -4,6 +4,8 @@ const fileUpload = document.getElementById("fileUpload");
 const fileName = document.getElementById("fileName");
 const subjectInput = document.getElementById("subject");
 const contentTextarea = document.getElementById("content");
+const accountRangeInput = document.getElementById("accountRange");
+const timeIntervalInput = document.getElementById("timeInterval");
 const startBtn = document.getElementById("startBtn");
 const stopBtn = document.getElementById("stopBtn");
 const statusDiv = document.getElementById("status");
@@ -12,18 +14,24 @@ const progressDiv = document.getElementById("progress");
 let emailList = [];
 
 // Load saved data
-chrome.storage.local.get(["emailList", "subject", "content"], (result) => {
-  if (result.emailList) {
-    emailListTextarea.value = result.emailList.join("\n");
-    emailList = result.emailList;
-  }
-  if (result.subject) {
-    subjectInput.value = result.subject;
-  }
-  if (result.content) {
-    contentTextarea.value = result.content;
-  }
-});
+chrome.storage.local.get(
+  ["emailList", "subject", "content", "timeInterval"],
+  (result) => {
+    if (result.emailList) {
+      emailListTextarea.value = result.emailList.join("\n");
+      emailList = result.emailList;
+    }
+    if (result.subject) {
+      subjectInput.value = result.subject;
+    }
+    if (result.content) {
+      contentTextarea.value = result.content;
+    }
+    if (result.timeInterval) {
+      timeIntervalInput.value = result.timeInterval;
+    }
+  },
+);
 
 // File upload handler
 fileUpload.addEventListener("change", (e) => {
@@ -84,11 +92,48 @@ startBtn.addEventListener("click", async () => {
     return;
   }
 
+  // Parse account range
+  const accountRange = accountRangeInput.value.trim();
+  let accountRangeParsed = null;
+
+  if (accountRange) {
+    const match = accountRange.match(/^(\d+)\s*-\s*(\d+)$/);
+    if (match) {
+      const start = parseInt(match[1], 10);
+      const end = parseInt(match[2], 10);
+      if (start > 0 && end >= start) {
+        accountRangeParsed = { start, end };
+      } else {
+        updateStatus("Invalid account range. Use format: 1-5", "error");
+        return;
+      }
+    } else {
+      updateStatus("Invalid account range format. Use: 1-5", "error");
+      return;
+    }
+  }
+
+  // Parse time interval
+  const timeIntervalValue = parseFloat(timeIntervalInput.value);
+  if (
+    isNaN(timeIntervalValue) ||
+    timeIntervalValue < 0.5 ||
+    timeIntervalValue > 300
+  ) {
+    updateStatus(
+      "Invalid time interval. Must be between 0.5 and 300 seconds.",
+      "error",
+    );
+    return;
+  }
+
   // Save to storage
   await chrome.storage.local.set({
     emailList: emails,
     subject: subject,
     content: content,
+    accountRange: accountRangeParsed,
+    timeInterval: timeIntervalValue,
   });
 
   // Update UI
@@ -103,6 +148,8 @@ startBtn.addEventListener("click", async () => {
     emails: emails,
     subject: subject,
     content: content,
+    accountRange: accountRangeParsed,
+    timeInterval: timeIntervalValue,
   });
 });
 
@@ -137,5 +184,6 @@ function updateStatus(text, type = "info") {
 }
 
 function updateProgress(current, total) {
-  progressDiv.textContent = `Progress: ${current} / ${total}`;
+  const percentage = total > 0 ? Math.round((current / total) * 100) : 0;
+  progressDiv.textContent = `Progress: ${current} / ${total} (${percentage}%)`;
 }

@@ -1,156 +1,252 @@
-let sendingQueue = [];
+let sendingQueues = {}; // { tabId: { emails: [], currentIndex: 0 } }
 let isSending = false;
-let currentIndex = 0;
-let delayBetweenEmails = 2500; // 2.5 seconds
+let totalEmails = 0;
+let totalSent = 0;
+let delayBetweenEmails = 2500; // Default: 2.5 seconds (will be set from user input)
+let accountTabs = []; // Array of Gmail tab IDs
 
 // Listen for messages from popup
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === "startSending") {
-    startSending(message.emails, message.subject, message.content);
+    startSending(
+      message.emails,
+      message.subject,
+      message.content,
+      message.accountRange,
+      message.timeInterval,
+    );
     sendResponse({ success: true });
   } else if (message.action === "stopSending") {
     stopSending();
     sendResponse({ success: true });
   } else if (message.action === "emailSent") {
-    handleEmailSent();
+    handleEmailSent(sender.tab.id);
     sendResponse({ success: true });
   } else if (message.action === "emailError") {
-    handleEmailError(message.error);
+    handleEmailError(message.error, sender.tab.id);
     sendResponse({ success: true });
   }
   return true; // Keep channel open for async response
 });
 
-function startSending(emails, subject, content) {
-  sendingQueue = emails;
-  currentIndex = 0;
+function startSending(emails, subject, content, accountRange, timeInterval) {
+  totalEmails = emails.length;
+  totalSent = 0;
   isSending = true;
+  sendingQueues = {};
+  accountTabs = [];
+
+  // Set delay between emails (convert seconds to milliseconds)
+  delayBetweenEmails = (timeInterval || 5) * 1000;
+
+  // Save to storage
+  chrome.storage.local.set({
+    subject: subject,
+    content: content,
+    timeInterval: timeInterval || 5,
+  });
 
   // Notify popup
   notifyPopup("updateStatus", {
-    text: "Checking for Gmail tab...",
+    text: "Checking for Gmail tabs...",
     type: "info",
   });
-  notifyPopup("updateProgress", { current: 0, total: emails.length });
+  notifyPopup("updateProgress", { current: 0, total: totalEmails });
 
-  // First, check if user is already on a Gmail tab
+  // Find all Gmail tabs
   chrome.tabs.query({ url: "https://mail.google.com/*" }, (tabs) => {
-    let gmailTab = null;
+    if (!tabs || tabs.length === 0) {
+      // No Gmail tabs found
+      if (accountRange) {
+        notifyPopup("updateStatus", {
+          text: "No Gmail tabs found. Please open Gmail tabs first.",
+          type: "error",
+        });
+        isSending = false;
+        return;
+      } else {
+        // Open a new Gmail tab
+        notifyPopup("updateStatus", { text: "Opening Gmail...", type: "info" });
+        chrome.tabs.create(
+          {
+            url: "https://mail.google.com/mail/u/0/#inbox?compose=new",
+            active: true,
+          },
+          (tab) => {
+            chrome.tabs.onUpdated.addListener(function listener(tabId, info) {
+              if (tabId === tab.id && info.status === "complete") {
+                chrome.tabs.onUpdated.removeListener(listener);
+                setTimeout(() => {
+                  distributeEmailsToTabs([tab.id], emails, subject, content);
+                }, 3000);
+              }
+            });
+          },
+        );
+        return;
+      }
+    }
 
-    // Find active Gmail tab first, or any Gmail tab
-    if (tabs && tabs.length > 0) {
-      // Prefer the active tab if it's Gmail
+    // If account range is specified, use those tabs
+    if (accountRange) {
+      const { start, end } = accountRange;
+
+      // Validate range
+      if (start < 1 || end < start) {
+        notifyPopup("updateStatus", {
+          text: `Invalid account range. Start must be >= 1 and end must be >= start.`,
+          type: "error",
+        });
+        isSending = false;
+        return;
+      }
+
+      if (start > tabs.length) {
+        notifyPopup("updateStatus", {
+          text: `Account range ${start}-${end} is out of bounds. Only ${tabs.length} Gmail tab(s) found.`,
+          type: "error",
+        });
+        isSending = false;
+        return;
+      }
+
+      // Gmail tabs are 0-indexed in the array, but user thinks 1-indexed
+      const selectedTabs = tabs.slice(start - 1, Math.min(end, tabs.length));
+
+      if (selectedTabs.length === 0) {
+        notifyPopup("updateStatus", {
+          text: `No Gmail tabs found in range ${start}-${end}. Found ${tabs.length} tab(s).`,
+          type: "error",
+        });
+        isSending = false;
+        return;
+      }
+
+      accountTabs = selectedTabs.map((tab) => tab.id);
+      notifyPopup("updateStatus", {
+        text: `Using ${selectedTabs.length} Gmail account(s) (${start}-${end})...`,
+        type: "info",
+      });
+    } else {
+      // Use current active tab if it's Gmail, otherwise use first tab
       chrome.tabs.query({ active: true, currentWindow: true }, (activeTabs) => {
+        let targetTab = null;
         if (
           activeTabs &&
           activeTabs.length > 0 &&
           activeTabs[0].url &&
           activeTabs[0].url.includes("mail.google.com")
         ) {
-          gmailTab = activeTabs[0];
+          targetTab = activeTabs[0];
         } else {
-          // Use the first Gmail tab found
-          gmailTab = tabs[0];
+          targetTab = tabs[0];
         }
 
-        if (gmailTab) {
-          // Use existing Gmail tab
+        if (targetTab) {
+          accountTabs = [targetTab.id];
           notifyPopup("updateStatus", {
-            text: "Using active Gmail tab...",
+            text: "Using current Gmail tab...",
             type: "info",
-          });
-
-          // Activate the tab
-          chrome.tabs.update(gmailTab.id, { active: true }, () => {
-            // Wait a moment for tab to be active, then start sending
-            setTimeout(() => {
-              // Open compose window if not already open
-              chrome.tabs.sendMessage(
-                gmailTab.id,
-                { action: "openCompose" },
-                (response) => {
-                  if (chrome.runtime.lastError) {
-                    // Content script might not be ready, wait a bit more
-                    setTimeout(() => {
-                      sendNextEmail(gmailTab.id, subject, content);
-                    }, 2000);
-                  } else {
-                    setTimeout(() => {
-                      sendNextEmail(gmailTab.id, subject, content);
-                    }, 2000);
-                  }
-                },
-              );
-            }, 1000);
           });
         } else {
-          // No Gmail tab found, open a new one
-          notifyPopup("updateStatus", {
-            text: "Opening Gmail...",
-            type: "info",
-          });
-
-          chrome.tabs.create(
-            {
-              url: "https://mail.google.com/mail/u/0/#inbox?compose=new",
-              active: true,
-            },
-            (tab) => {
-              // Wait for tab to load and content script to be ready
-              chrome.tabs.onUpdated.addListener(function listener(tabId, info) {
-                if (tabId === tab.id && info.status === "complete") {
-                  chrome.tabs.onUpdated.removeListener(listener);
-                  // Give Gmail a moment to fully load and content script to initialize
-                  setTimeout(() => {
-                    sendNextEmail(tab.id, subject, content);
-                  }, 3000);
-                }
-              });
-            },
-          );
+          accountTabs = [tabs[0].id];
         }
+
+        distributeEmailsToTabs(accountTabs, emails, subject, content);
       });
-    } else {
-      // No Gmail tab found, open a new one
-      notifyPopup("updateStatus", { text: "Opening Gmail...", type: "info" });
-
-      chrome.tabs.create(
-        {
-          url: "https://mail.google.com/mail/u/0/#inbox?compose=new",
-          active: true,
-        },
-        (tab) => {
-          // Wait for tab to load and content script to be ready
-          chrome.tabs.onUpdated.addListener(function listener(tabId, info) {
-            if (tabId === tab.id && info.status === "complete") {
-              chrome.tabs.onUpdated.removeListener(listener);
-              // Give Gmail a moment to fully load and content script to initialize
-              setTimeout(() => {
-                sendNextEmail(tab.id, subject, content);
-              }, 3000);
-            }
-          });
-        },
-      );
+      return;
     }
+
+    distributeEmailsToTabs(accountTabs, emails, subject, content);
   });
 }
 
-function sendNextEmail(tabId, subject, content) {
-  if (!isSending || currentIndex >= sendingQueue.length) {
-    completeSending();
+function distributeEmailsToTabs(tabIds, emails, subject, content) {
+  const numAccounts = tabIds.length;
+  const totalEmails = emails.length;
+
+  // Calculate base emails per account and remainder
+  const baseEmailsPerAccount = Math.floor(totalEmails / numAccounts);
+  const remainder = totalEmails % numAccounts;
+
+  // Distribute emails across accounts more evenly
+  // First 'remainder' accounts get one extra email
+  let currentIndex = 0;
+  tabIds.forEach((tabId, index) => {
+    const emailsForThisAccount =
+      baseEmailsPerAccount + (index < remainder ? 1 : 0);
+    const startIndex = currentIndex;
+    const endIndex = currentIndex + emailsForThisAccount;
+    const accountEmails = emails.slice(startIndex, endIndex);
+    currentIndex = endIndex;
+
+    sendingQueues[tabId] = {
+      emails: accountEmails,
+      currentIndex: 0,
+      total: accountEmails.length,
+    };
+
+    // Activate and prepare the tab
+    chrome.tabs.update(tabId, { active: false }, () => {
+      // Wait a moment, then start sending from this account
+      setTimeout(() => {
+        chrome.tabs.sendMessage(
+          tabId,
+          { action: "openCompose" },
+          (response) => {
+            if (chrome.runtime.lastError) {
+              // Content script might not be ready
+              setTimeout(() => {
+                startSendingFromTab(tabId, subject, content);
+              }, 2000);
+            } else {
+              setTimeout(() => {
+                startSendingFromTab(tabId, subject, content);
+              }, 2000);
+            }
+          },
+        );
+      }, index * 1000); // Stagger starts by 1 second per account
+    });
+  });
+
+  notifyPopup("updateStatus", {
+    text: `Distributed ${emails.length} email(s) across ${numAccounts} account(s). Starting...`,
+    type: "info",
+  });
+}
+
+function startSendingFromTab(tabId, subject, content) {
+  const queue = sendingQueues[tabId];
+  if (!queue || queue.currentIndex >= queue.emails.length) {
+    // This account is done
     return;
   }
 
-  const email = sendingQueue[currentIndex];
+  sendNextEmail(tabId, subject, content);
+}
+
+function sendNextEmail(tabId, subject, content) {
+  if (!isSending) {
+    return;
+  }
+
+  const queue = sendingQueues[tabId];
+  if (!queue || queue.currentIndex >= queue.emails.length) {
+    // This account is done, check if all accounts are done
+    checkAllAccountsComplete();
+    return;
+  }
+
+  const email = queue.emails[queue.currentIndex];
 
   notifyPopup("updateStatus", {
-    text: `Sending to ${email}...`,
+    text: `Account ${accountTabs.indexOf(tabId) + 1}: Sending to ${email}...`,
     type: "info",
   });
   notifyPopup("updateProgress", {
-    current: currentIndex,
-    total: sendingQueue.length,
+    current: totalSent,
+    total: totalEmails,
   });
 
   // Send message to content script
@@ -164,16 +260,18 @@ function sendNextEmail(tabId, subject, content) {
     },
     (response) => {
       if (chrome.runtime.lastError) {
-        handleEmailError(chrome.runtime.lastError.message);
+        handleEmailError(chrome.runtime.lastError.message, tabId);
         return;
       }
 
       if (response && response.success) {
-        // Wait a moment, then proceed to next email
+        // Email sent successfully
         setTimeout(() => {
-          currentIndex++;
-          if (isSending && currentIndex < sendingQueue.length) {
-            // Open compose window for next email (using content script)
+          queue.currentIndex++;
+          totalSent++;
+
+          if (isSending && queue.currentIndex < queue.emails.length) {
+            // Open compose window for next email
             chrome.tabs.sendMessage(
               tabId,
               { action: "openCompose" },
@@ -210,52 +308,52 @@ function sendNextEmail(tabId, subject, content) {
               },
             );
           } else {
-            completeSending();
+            // This account is done
+            checkAllAccountsComplete();
           }
         }, 2000);
       } else {
-        handleEmailError(response?.error || "Failed to send email");
+        handleEmailError(response?.error || "Failed to send email", tabId);
       }
     },
   );
 }
 
-function handleEmailError(error) {
+function handleEmailError(error, tabId) {
   notifyPopup("updateStatus", {
     text: `Error: ${error}`,
     type: "error",
   });
 
-  // Continue with next email after error
-  currentIndex++;
-  if (isSending && currentIndex < sendingQueue.length) {
-    chrome.storage.local.get(["subject", "content"], (result) => {
-      chrome.tabs.query({ url: "https://mail.google.com/*" }, (tabs) => {
-        if (tabs && tabs.length > 0) {
-          const gmailTab = tabs[0];
-          // Try to open compose window using content script
+  const queue = sendingQueues[tabId];
+  if (queue) {
+    queue.currentIndex++;
+    totalSent++;
+
+    if (isSending && queue.currentIndex < queue.emails.length) {
+      chrome.storage.local.get(["subject", "content"], (result) => {
+        setTimeout(() => {
           chrome.tabs.sendMessage(
-            gmailTab.id,
+            tabId,
             { action: "openCompose" },
             (openResponse) => {
               if (chrome.runtime.lastError) {
-                // If content script not ready, navigate to compose URL
                 chrome.tabs.update(
-                  gmailTab.id,
+                  tabId,
                   {
                     url: "https://mail.google.com/mail/u/0/#inbox?compose=new",
                   },
                   () => {
                     chrome.tabs.onUpdated.addListener(
-                      function listener(tabId, info) {
+                      function listener(updatedTabId, info) {
                         if (
-                          tabId === gmailTab.id &&
+                          updatedTabId === tabId &&
                           info.status === "complete"
                         ) {
                           chrome.tabs.onUpdated.removeListener(listener);
                           setTimeout(() => {
                             sendNextEmail(
-                              gmailTab.id,
+                              tabId,
                               result.subject,
                               result.content,
                             );
@@ -266,17 +364,32 @@ function handleEmailError(error) {
                   },
                 );
               } else {
-                // Compose window opened, proceed after delay
                 setTimeout(() => {
-                  sendNextEmail(gmailTab.id, result.subject, result.content);
+                  sendNextEmail(tabId, result.subject, result.content);
                 }, delayBetweenEmails);
               }
             },
           );
-        }
+        }, delayBetweenEmails);
       });
-    });
-  } else {
+    } else {
+      checkAllAccountsComplete();
+    }
+  }
+}
+
+function checkAllAccountsComplete() {
+  // Check if all accounts have finished sending
+  let allComplete = true;
+  for (const tabId of accountTabs) {
+    const queue = sendingQueues[tabId];
+    if (queue && queue.currentIndex < queue.emails.length) {
+      allComplete = false;
+      break;
+    }
+  }
+
+  if (allComplete && isSending) {
     completeSending();
   }
 }
@@ -288,9 +401,11 @@ function stopSending() {
 
 function completeSending() {
   isSending = false;
-  notifyPopup("sendingComplete", { total: sendingQueue.length });
-  sendingQueue = [];
-  currentIndex = 0;
+  notifyPopup("sendingComplete", { total: totalSent });
+  sendingQueues = {};
+  accountTabs = [];
+  totalEmails = 0;
+  totalSent = 0;
 }
 
 function notifyPopup(action, data) {
