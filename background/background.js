@@ -2,8 +2,15 @@ let sendingQueues = {}; // { tabId: { emails: [], currentIndex: 0 } }
 let isSending = false;
 let totalEmails = 0;
 let totalSent = 0;
-let delayBetweenEmails = 2500; // Default: 2.5 seconds (will be set from user input)
+let delayBetweenEmails = 2500; // Base delay in ms (will be set from user input)
 let accountTabs = []; // Array of Gmail tab IDs
+
+// Returns a randomized delay (base ± 25%) to make timing less predictable
+function getRandomDelay() {
+  const variation = 0.25; // ±25%
+  const factor = 1 + (Math.random() * 2 - 1) * variation;
+  return Math.round(delayBetweenEmails * factor);
+}
 
 // Listen for messages from popup
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -37,13 +44,13 @@ function startSending(emails, subject, content, accountRange, timeInterval) {
   accountTabs = [];
 
   // Set delay between emails (convert seconds to milliseconds)
-  delayBetweenEmails = (timeInterval || 5) * 1000;
+  delayBetweenEmails = (timeInterval || 8) * 1000;
 
   // Save to storage
   chrome.storage.local.set({
     subject: subject,
     content: content,
-    timeInterval: timeInterval || 5,
+    timeInterval: timeInterval || 8,
   });
 
   // Notify popup
@@ -293,7 +300,7 @@ function sendNextEmail(tabId, subject, content) {
                             chrome.tabs.onUpdated.removeListener(listener);
                             setTimeout(() => {
                               sendNextEmail(tabId, subject, content);
-                            }, delayBetweenEmails);
+                            }, getRandomDelay());
                           }
                         },
                       );
@@ -303,7 +310,7 @@ function sendNextEmail(tabId, subject, content) {
                   // Compose window opened, proceed after delay
                   setTimeout(() => {
                     sendNextEmail(tabId, subject, content);
-                  }, delayBetweenEmails);
+                  }, getRandomDelay());
                 }
               },
             );
@@ -357,7 +364,7 @@ function handleEmailError(error, tabId) {
                               result.subject,
                               result.content,
                             );
-                          }, delayBetweenEmails);
+                          }, getRandomDelay());
                         }
                       },
                     );
@@ -366,11 +373,11 @@ function handleEmailError(error, tabId) {
               } else {
                 setTimeout(() => {
                   sendNextEmail(tabId, result.subject, result.content);
-                }, delayBetweenEmails);
+                }, getRandomDelay());
               }
             },
           );
-        }, delayBetweenEmails);
+        }, getRandomDelay());
       });
     } else {
       checkAllAccountsComplete();
