@@ -53,7 +53,7 @@ fileUpload.addEventListener("change", (e) => {
 
 // Parse email list from text
 function parseEmailList(text) {
-  return text
+  const emails = text
     .split("\n")
     .map((line) => line.trim())
     .filter((line) => {
@@ -61,6 +61,17 @@ function parseEmailList(text) {
       const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
       return line && emailRegex.test(line);
     });
+
+  // Filter duplicates (case-insensitive, keep first occurrence)
+  const seen = new Set();
+  return emails.filter((email) => {
+    const lowerEmail = email.toLowerCase();
+    if (seen.has(lowerEmail)) {
+      return false;
+    }
+    seen.add(lowerEmail);
+    return true;
+  });
 }
 
 // Update email list from textarea
