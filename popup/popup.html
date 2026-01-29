@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Gmail Auto-Email Sender</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <div class="container">
+      <h1>Gmail Auto-Email Sender</h1>
+
+      <div class="section">
+        <label for="emailList">Email List (one per line):</label>
+        <textarea
+          id="emailList"
+          rows="6"
+          placeholder="email1@example.com&#10;email2@example.com&#10;email3@example.com"
+        ></textarea>
+      </div>
+
+      <div class="section">
+        <label for="fileUpload" class="file-upload-label">
+          <input
+            type="file"
+            id="fileUpload"
+            accept=".txt,.csv"
+            style="display: none"
+          />
+          <span class="file-upload-button">📁 Upload Email List File</span>
+        </label>
+        <span id="fileName" class="file-name"></span>
+      </div>
+
+      <div class="section">
+        <label for="subject">Email Subject:</label>
+        <input type="text" id="subject" placeholder="Enter email subject" />
+      </div>
+
+      <div class="section">
+        <label for="content">Email Content:</label>
+        <textarea
+          id="content"
+          rows="8"
+          placeholder="Enter email content"
+        ></textarea>
+      </div>
+
+      <div class="section">
+        <div class="button-group">
+          <button id="startBtn" class="btn btn-primary">Start Sending</button>
+          <button id="stopBtn" class="btn btn-danger" disabled>Stop</button>
+        </div>
+      </div>
+
+      <div class="section">
+        <div id="status" class="status"></div>
+        <div id="progress" class="progress"></div>
+      </div>
+    </div>
+
+    <script src="popup.js"></script>
+  </body>
+</html>

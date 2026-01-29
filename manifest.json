@@ -1,0 +1,21 @@
+{
+  "manifest_version": 3,
+  "name": "Gmail Auto-Email Sender",
+  "version": "1.0.0",
+  "description": "Automatically send emails through Gmail UI with a list of recipients",
+  "permissions": ["activeTab", "storage", "scripting"],
+  "host_permissions": ["https://mail.google.com/*"],
+  "background": {
+    "service_worker": "background/background.js"
+  },
+  "action": {
+    "default_popup": "popup/popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://mail.google.com/*"],
+      "js": ["content/gmail-sender.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}
